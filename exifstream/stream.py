@@ -1,9 +1,9 @@
 import struct
+from .tags import ExifTag
+
 
 class StreamProcessor(object):
     EXIF_HEADER = 'Exif\x00\x00'
-    # FFD8 + FFE1 + Size (int) + EXIF_HEADER
-    EXIF_TOTAL_HDR_LEN = 12
     TIFF_HEADER_LEN = 8
     IFD_LEN = 12
 
@@ -34,6 +34,7 @@ class StreamProcessor(object):
         self.next_ifd_offset = None
         self.file_offset = 0
         self.current_tag = None
+        self.tiff_start = None
 
     def check_type(self, header_str):
         if header_str != b'\xFF\xD8':
@@ -89,7 +90,7 @@ class StreamProcessor(object):
             self.state = 'exif marker'
             self.marker_pos = 0
             return data[self.exif_marker_size - self.marker_pos:]
-        self.marker_pos = len(self.data)
+        self.marker_pos += len(data)
         return None
 
     def handle_exif_marker_data(self, data):
@@ -104,8 +105,10 @@ class StreamProcessor(object):
                 self.state = 'non-exif marker'
                 return data
         self.state = 'tiff-data'
+        read_exif_bytes = len(self.EXIF_HEADER) - self.marker_pos
+        self.tiff_start = self.file_offset + read_exif_bytes
         self.marker_pos = 0
-        return data[len(self.EXIF_HEADER) - self.marker_pos:]
+        return data[read_exif_bytes:]
 
     def handle_tiff_headers(self, data):
         if self.marker_pos < 2:
@@ -158,10 +161,12 @@ class StreamProcessor(object):
         total_size = self.COMPONENT_SIZES[fmt] * components
         if total_size > 4 or tag == 0x8769:
             data_offset = self.unpack_tiff_data('I', ifd_data[8:])[0]
-            abs_offset = data_offset + self.EXIF_TOTAL_HDR_LEN
-            self.ifd_offsets[tag] = (abs_offset, total_size, tag)
+            abs_offset = data_offset + self.tiff_start
+            self.ifd_offsets[tag] = (abs_offset, total_size, tag, fmt,
+                                     self.tiff_alignment)
         else:
-            tag_data = self.unpack_tiff_data('I', ifd_data[8:])[0]
+            self.tags.append(ExifTag(tag, fmt, ifd_data[8:8+total_size],
+                                     self.tiff_alignment))
         return data
 
     def handle_ifd_end(self, data):
@@ -171,10 +176,15 @@ class StreamProcessor(object):
             return None
 
         next_ifd_offset = self.unpack_tiff_data('I', next_ifd_offset)[0]
-        if next_ifd_offset == 0:
-            self.state = 'tag-offsets'
-            self.sorted_offsets = self.ifd_offsets.values()
-            self.sorted_offsets.sort(key=lambda x: x[0])
+
+        self.state = 'tag-offsets'
+        self.sorted_offsets = self.ifd_offsets.values()
+        if next_ifd_offset:
+            self.sorted_offsets.append((
+                next_ifd_offset + self.tiff_start, -1, -1, -1, -1))
+        self.sorted_offsets = filter(lambda x: x[0] >= self.file_offset,
+                                     self.sorted_offsets)
+        self.sorted_offsets.sort(key=lambda x: x[0])
         return data
 
     def handle_ifds(self, data):
@@ -186,20 +196,25 @@ class StreamProcessor(object):
         return data
 
     def handle_tag_offsets(self, data):
-        if self.current_tag == None:
+        if self.current_tag is None:
             if not self.sorted_offsets:
                 return None
             if self.sorted_offsets[0][0] != self.file_offset:
-                print 'Warning: Could not find a tag at the offset. Is parsing broken?!'
+                # Figure out why the offsets don't work out in some cases
+                print 'Warning: Could not find a tag at the offset.'
                 return data[1:]
             self.current_tag = self.sorted_offsets[0]
             del self.sorted_offsets[0]
-        offset, size, tag = self.current_tag
+        offset, size, tag, fmt, endian = self.current_tag
+        if tag == 0x8769 or tag == -1:
+            self.state = 'tiff-ifds'
+            self.current_tag = None
+            return data
+
         tag_data, data = self.read_sized_length(data, size)
         if not tag_data:
             return None
-        if tag != 0x8769:
-            print tag_data
+        self.tags.append(ExifTag(tag, fmt, tag_data, endian))
         self.current_tag = None
         return data
 
