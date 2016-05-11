@@ -58,7 +58,7 @@ class StreamProcessor(object):
             self.buffer += data
             return (None, None)
         if not self.buffer and len(data) >= length:
-            result_str = data
+            result_str = data[:length]
         else:
             result_str = self.buffer + data[:length - len(self.buffer)]
         buffer_len = len(self.buffer)
