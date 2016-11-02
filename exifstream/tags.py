@@ -101,9 +101,11 @@ class ExifTag(object):
                 return str(results[0]) + ' m'
             # Parse the GPS Latitude/Longitude string correctly
             if self._tag == 0x2 or self._tag == 0x4:
-                seconds = results[2].numerator*1.0/results[2].denominator
-                return str(results[0]) + ' ' + str(results[1]) + "'" +\
-                    str(seconds) + u'"'
+                results = map(lambda x: x.numerator * 1.0/x.denominator,
+                              results)
+                seconds = results[2]/3600
+                minutes = results[1]/60
+                return results[0] + minutes + seconds
             # GPS TimeStamp is also three rationals
             if self._tag == 0x7:
                 return ':'.join(map(str, results))
