@@ -159,7 +159,9 @@ class StreamProcessor(object):
         self.ifd_count -= 1
         tag, fmt, components = self.unpack_tiff_data('HHI', ifd_data[0:8])
         total_size = self.COMPONENT_SIZES[fmt] * components
-        if total_size > 4 or tag == 0x8769:
+        # 0x8769 - EXIF IFD
+        # 0x8825 - GPS IFD
+        if total_size > 4 or tag == 0x8769 or tag == 0x8825:
             data_offset = self.unpack_tiff_data('I', ifd_data[8:])[0]
             abs_offset = data_offset + self.tiff_start
             self.ifd_offsets[tag] = (abs_offset, total_size, tag, fmt,
@@ -202,11 +204,14 @@ class StreamProcessor(object):
             if self.sorted_offsets[0][0] != self.file_offset:
                 # Figure out why the offsets don't work out in some cases
                 print 'Warning: Could not find a tag at the offset.'
+                print "File offset:", self.file_offset,
+                print "Tag offset:", self.sorted_offsets[0][0]
                 return data[1:]
             self.current_tag = self.sorted_offsets[0]
             del self.sorted_offsets[0]
         offset, size, tag, fmt, endian = self.current_tag
-        if tag == 0x8769 or tag == -1:
+        # 0x8769 -- TIFF IFD; 0x8825 -- GPS IFD
+        if tag == 0x8769 or tag == 0x8825 or tag == -1:
             self.state = 'tiff-ifds'
             self.current_tag = None
             return data
